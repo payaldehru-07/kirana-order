@@ -1,4 +1,5 @@
 import { once } from 'node:events';
+import http from 'node:http';
 import { openDb } from '../src/db.js';
 import { seedDb } from '../src/seed.js';
 import { createApp } from '../src/app.js';
@@ -12,8 +13,8 @@ export async function startTestServer(configOverrides = {}) {
   await once(server, 'listening');
   const base = `http://127.0.0.1:${server.address().port}`;
 
-  async function call(method, path, { token, body } = {}) {
-    const headers = {};
+  async function call(method, path, { token, body, headers: extra } = {}) {
+    const headers = { ...extra };
     if (body !== undefined) headers['content-type'] = 'application/json';
     if (token) headers.authorization = `Bearer ${token}`;
     const res = await fetch(base + path, {
@@ -22,12 +23,21 @@ export async function startTestServer(configOverrides = {}) {
       body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
     });
     const text = await res.text();
-    return { status: res.status, body: text ? JSON.parse(text) : null };
+    return { status: res.status, headers: res.headers, body: text ? JSON.parse(text) : null };
   }
+
+  // fetch() secretly adds "Cache-Control: no-cache" when If-None-Match is set (Fetch spec), which makes Express
+  // skip the 304. node:http sends exactly the headers given, like a browser's normal revalidation.
+  const rawGet = (path, headers) => new Promise((resolve, reject) => {
+    http.get(base + path, { headers }, (res) => {
+      res.resume();
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers }));
+    }).on('error', reject);
+  });
 
   const login = async (phone) => (await call('POST', '/api/auth/verify', { body: { phone, otp: '123456' } })).body.token;
   const close = () => { server.closeAllConnections(); return new Promise((r) => server.close(r)); };
-  return { db, call, login, close, config };
+  return { db, call, rawGet, login, close, config };
 }
 
 // Demo phones from the seed
