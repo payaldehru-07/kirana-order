@@ -1,0 +1,11 @@
+{
+  "name": "kirana-order-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "seed": "node src/seed.js",
+    "test": "node --test"
+  }
+}
