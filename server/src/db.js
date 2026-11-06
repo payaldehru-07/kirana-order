@@ -4,7 +4,34 @@ export function openDb(file = process.env.DB_FILE || 'kirana.db') {
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  migrate(db);
   return db;
+}
+
+/**
+ * Run fn() as ONE all-or-nothing database transaction.
+ * BEGIN IMMEDIATE takes the write lock up front, so nobody else can change stock or credit between
+ * our checks and our inserts. If fn throws, everything it did is rolled back.
+ */
+export function inTransaction(db, fn) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = fn();
+    db.exec('COMMIT');
+    return result;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+/** Upgrades a database created by an earlier step, so an existing kirana.db keeps working (no re-seed needed). */
+export function migrate(db) {
+  const cols = db.prepare('PRAGMA table_info(orders)').all().map((c) => c.name);
+  if (!cols.includes('client_ref')) db.exec('ALTER TABLE orders ADD COLUMN client_ref TEXT');
+  // One client_ref per retailer: a repeated tap with the same ref returns the first order instead of creating a second.
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_client_ref
+           ON orders(retailer_id, client_ref) WHERE client_ref IS NOT NULL`);
 }
 
 // Money is integer paise everywhere. Quantities are whole cases.
@@ -58,7 +85,8 @@ CREATE TABLE IF NOT EXISTS orders (
   gst_paise INTEGER NOT NULL,
   total_paise INTEGER NOT NULL,
   hold_reason TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  client_ref TEXT
 );
 
 CREATE TABLE IF NOT EXISTS order_lines (
