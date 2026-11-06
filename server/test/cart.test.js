@@ -135,3 +135,32 @@ test('pricing is a preview: stock and orders are untouched', async () => {
   assert.equal(s.db.prepare('SELECT stock_cases FROM skus WHERE code = ?').get('SKU-BS-075').stock_cases, before);
   assert.equal(s.db.prepare('SELECT COUNT(*) c FROM orders').get().c, orders);
 });
+
+// ---- credit preview (A9) ----
+test('credit preview: Sharma (limit 60,000, owes 12,000) has room for a small cart', async () => {
+  const r = await price(sharma, { items: [{ sku: 'SKU-BS-075', qty: 5 }] });
+  assert.deepEqual(r.body.credit, {
+    limitPaise: 6_000_000, outstandingPaise: 1_200_000, pendingPaise: 0, availablePaise: 4_800_000,
+    orderTotalPaise: 458784, afterOrderPaise: 1_658_784, exceedsLimit: false, overByPaise: 0,
+  });
+});
+
+test('credit preview: Gupta (limit 40,000, owes 36,500) would exceed with 5 biscuit cases', async () => {
+  const gupta = await s.login(PHONES.gupta);
+  const r = await price(gupta, { items: [{ sku: 'SKU-BS-075', qty: 5 }] });
+  assert.equal(r.body.credit.availablePaise, 350_000);
+  assert.equal(r.body.credit.afterOrderPaise, 4_108_784);      // 3,650,000 + 458,784
+  assert.equal(r.body.credit.exceedsLimit, true);
+  assert.equal(r.body.credit.overByPaise, 108_784);            // 4,108,784 - 4,000,000
+  const small = await price(gupta, { items: [{ sku: 'SKU-BS-075', qty: 1 }] });
+  assert.equal(small.body.credit.exceedsLimit, false);          // 91,757 fits in 350,000
+});
+
+test('credit preview uses the GST-inclusive total, not the pre-GST amount', async () => {
+  const gupta = await s.login(PHONES.gupta);
+  // 4 biscuit cases: net 311,040 (< 350,000 available) but with 18% GST total is 367,027 (> 350,000)
+  const r = await price(gupta, { items: [{ sku: 'SKU-BS-075', qty: 4 }] });
+  assert.equal(r.body.totals.netPaise, 311040);
+  assert.equal(r.body.credit.orderTotalPaise, 367027);
+  assert.equal(r.body.credit.exceedsLimit, true);
+});

@@ -3,6 +3,7 @@ import { MOCK_OTP } from '../config.js';
 import { HttpError } from '../errors.js';
 import { signToken } from '../token.js';
 import { authenticate } from '../auth.js';
+import { createCreditRepo } from '../credit.js';
 import { bodyObject, phoneField, otpField } from '../validate.js';
 
 /**
@@ -32,9 +33,10 @@ function createAttemptLimiter({ max = 5, lockMs = 5 * 60_000, now = () => Date.n
 export function createAuthRouter({ db, config }) {
   const router = Router();
   const limiter = createAttemptLimiter();
+  const credit = createCreditRepo(db);
   const findUser = db.prepare('SELECT id, name, role, retailer_id FROM users WHERE phone = ?');
   const getRetailer = db.prepare(
-    'SELECT shop_name, owner_name, area, salesman, credit_limit_paise, outstanding_paise FROM retailers WHERE id = ?',
+    'SELECT shop_name, owner_name, area, salesman FROM retailers WHERE id = ?',
   );
 
   // Step 1 of login. Mock: nothing is sent. Same answer for known and unknown numbers (no user enumeration).
@@ -74,13 +76,16 @@ export function createAuthRouter({ db, config }) {
     const out = { user: { id, name, role, retailerId } };
     if (role === 'retailer') {
       const r = getRetailer.get(retailerId);
+      const c = credit.snapshot(retailerId);
       out.retailer = {
         shopName: r.shop_name,
         ownerName: r.owner_name,
         area: r.area,
         salesman: r.salesman,
-        creditLimitPaise: r.credit_limit_paise,
-        outstandingPaise: r.outstanding_paise,
+        creditLimitPaise: c.limitPaise,
+        outstandingPaise: c.outstandingPaise,
+        pendingPaise: c.pendingPaise,           // orders placed/approved, not yet in Tally (A9)
+        availableCreditPaise: c.availablePaise, // what they can still order on credit right now
       };
     }
     res.json(out);
