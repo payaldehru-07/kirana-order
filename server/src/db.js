@@ -28,10 +28,19 @@ export function inTransaction(db, fn) {
 /** Upgrades a database created by an earlier step, so an existing kirana.db keeps working (no re-seed needed). */
 export function migrate(db) {
   const cols = db.prepare('PRAGMA table_info(orders)').all().map((c) => c.name);
-  if (!cols.includes('client_ref')) db.exec('ALTER TABLE orders ADD COLUMN client_ref TEXT');
+  const added = [
+    ['client_ref', 'TEXT'],                       // idempotency key (Step 3)
+    ['original_total_paise', 'INTEGER'],          // total before the FIRST desk edit, so old vs new stays visible
+    ['desk_note', 'TEXT'],                        // reason typed by the desk on reject
+    ['export_id', 'INTEGER REFERENCES exports(id)'], // which Tally export batch took this order
+  ];
+  for (const [name, def] of added) {
+    if (!cols.includes(name)) db.exec(`ALTER TABLE orders ADD COLUMN ${name} ${def}`);
+  }
   // One client_ref per retailer: a repeated tap with the same ref returns the first order instead of creating a second.
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_client_ref
            ON orders(retailer_id, client_ref) WHERE client_ref IS NOT NULL`);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_orders_export ON orders(export_id)');
 }
 
 // Money is integer paise everywhere. Quantities are whole cases.
@@ -86,7 +95,18 @@ CREATE TABLE IF NOT EXISTS orders (
   total_paise INTEGER NOT NULL,
   hold_reason TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  client_ref TEXT
+  client_ref TEXT,
+  original_total_paise INTEGER,
+  desk_note TEXT,
+  export_id INTEGER REFERENCES exports(id)
+);
+
+-- One row per Tally export: which approved orders were handed to Tally together.
+CREATE TABLE IF NOT EXISTS exports (
+  id INTEGER PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  order_count INTEGER NOT NULL,
+  total_paise INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS order_lines (

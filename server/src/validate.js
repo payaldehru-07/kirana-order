@@ -45,11 +45,14 @@ export const MAX_CART_LINES = 50;
 export const MAX_QTY_CASES = 9999;
 
 /**
- * Validates a cart: [{ sku, qty }]. Used by cart pricing now and order placement next.
+ * Validates a cart: [{ sku, qty }]. Used by cart pricing, order placement, desk edits and AI confirm.
  * Collects EVERY line problem (with its position) so the screen can mark all bad lines at once.
- * Duplicate SKUs are rejected, not merged: schemes depend on the total per SKU, so one line per SKU.
+ * Options:
+ *  keepText        keep each line's optional originalText (the customer's own words). Only for desk edit and AI confirm.
+ *  mergeDuplicates add quantities of repeated SKUs into one line (AI messages repeat items). Default: reject duplicates,
+ *                  because schemes depend on the total per SKU, so there must be one line per SKU.
  */
-export function parseCartItems(raw) {
+export function parseCartItems(raw, { keepText = false, mergeDuplicates = false } = {}) {
   if (!Array.isArray(raw) || raw.length === 0) {
     throw new HttpError(400, 'invalid_items', 'items must be a non-empty list');
   }
@@ -57,7 +60,6 @@ export function parseCartItems(raw) {
     throw new HttpError(400, 'invalid_items', `A cart can have at most ${MAX_CART_LINES} lines`);
   }
   const problems = [];
-  const seen = new Set();
   const items = [];
   raw.forEach((it, index) => {
     const bad = (problem) => problems.push({ index, problem });
@@ -67,12 +69,41 @@ export function parseCartItems(raw) {
     if (!Number.isInteger(it.qty) || it.qty < 1 || it.qty > MAX_QTY_CASES) {
       return bad(`qty must be a whole number of cases from 1 to ${MAX_QTY_CASES}`);
     }
-    if (seen.has(sku)) return bad(`duplicate sku ${sku}; use one line per product`);
-    seen.add(sku);
-    items.push({ sku, qty: it.qty });
+    let text;
+    if (keepText && it.originalText !== undefined && it.originalText !== null) {
+      if (typeof it.originalText !== 'string' || it.originalText.length > 200) return bad('originalText must be text of at most 200 characters');
+      text = it.originalText.trim() || undefined;
+    }
+    const existing = items.find((x) => x.sku === sku);
+    if (existing) {
+      if (!mergeDuplicates) return bad(`duplicate sku ${sku}; use one line per product`);
+      if (existing.qty + it.qty > MAX_QTY_CASES) return bad(`total qty for ${sku} is too large`);
+      existing.qty += it.qty;
+      if (text) existing.originalText = existing.originalText ? `${existing.originalText} + ${text}`.slice(0, 200) : text;
+      return;
+    }
+    const item = { sku, qty: it.qty };
+    if (text) item.originalText = text;
+    items.push(item);
   });
   if (problems.length) throw new HttpError(400, 'invalid_items', 'Some cart lines are not valid', problems);
   return items;
+}
+
+/** Optional query value that must be one of a fixed list. */
+export function enumQuery(v, name, allowed) {
+  if (v === undefined) return null;
+  if (typeof v !== 'string' || !allowed.includes(v)) {
+    throw new HttpError(400, `invalid_${name}`, `${name} must be one of: ${allowed.join(', ')}`);
+  }
+  return v;
+}
+
+/** Optional short free-text note (e.g. reject reason). */
+export function noteField(v, name = 'reason') {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'string' || v.length > 200) throw new HttpError(400, `invalid_${name}`, `${name} must be text of at most 200 characters`);
+  return v.trim() || null;
 }
 
 /** Required numeric id in a URL path (/orders/:id). */
@@ -101,4 +132,12 @@ export function limitQuery(v, { def = 20, max = 100 } = {}) {
     throw new HttpError(400, 'invalid_limit', `limit must be a whole number from 1 to ${max}`);
   }
   return Number(v);
+}
+
+/** The message to read: text, 1 to 2000 characters. */
+export function textField(v) {
+  if (typeof v !== 'string' || v.trim().length === 0 || v.length > 2000) {
+    throw new HttpError(400, 'invalid_text', 'text must be a message of 1 to 2000 characters');
+  }
+  return v.trim();
 }

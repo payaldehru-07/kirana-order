@@ -1,12 +1,11 @@
 import { HttpError } from './errors.js';
 import { inTransaction } from './db.js';
 import { createSkuRepo } from './skus.js';
-import { createCreditRepo, checkCredit, creditPreview } from './credit.js';
+import { createCreditRepo, checkCredit, creditPreview, holdReasonText } from './credit.js';
 import { quoteCart } from './cart.js';
 
 // SQLite stores "YYYY-MM-DD HH:MM:SS" in UTC with no zone marker. Clients get proper ISO 8601.
 const iso = (sqliteTime) => `${sqliteTime.replace(' ', 'T')}Z`;
-const rupees = (paise) => `${Math.floor(paise / 100)}.${String(paise % 100).padStart(2, '0')}`;
 
 export function createOrderService(db) {
   const skuRepo = createSkuRepo(db);
@@ -54,6 +53,9 @@ export function createOrderService(db) {
       source: row.source,
       status: row.status,
       holdReason: row.hold_reason,
+      deskNote: row.desk_note,
+      originalTotalPaise: row.original_total_paise, // set once the desk has edited the order
+      exportId: row.export_id,
       createdAt: iso(row.created_at),
       totals: { netPaise: row.net_paise, gstPaise: row.gst_paise, totalPaise: row.total_paise },
       lines,
@@ -61,6 +63,13 @@ export function createOrderService(db) {
   }
 
   return {
+    /** Any order by id, no permission check. Only for server-side callers (desk service); routes use getForUser. */
+    load(orderId) {
+      const row = getOrder.get(orderId);
+      if (!row) throw new HttpError(404, 'order_not_found', 'No such order');
+      return toOrder(row);
+    },
+
     /**
      * Place an order. Everything below happens in ONE transaction (all-or-nothing):
      *   1. same clientRef already used? -> return that order (double tap / retry)
@@ -94,10 +103,7 @@ export function createOrderService(db) {
         const snap = credit.snapshot(retailerId);
         const check = checkCredit(snap, quote.totals.totalPaise);
         const status = check.exceeds ? 'credit_hold' : 'placed';
-        const holdReason = check.exceeds
-          ? `Order total Rs ${rupees(quote.totals.totalPaise)} would take exposure to Rs ${rupees(check.afterOrderPaise)}, ` +
-            `above credit limit Rs ${rupees(snap.limitPaise)}`
-          : null;
+        const holdReason = check.exceeds ? holdReasonText(quote.totals.totalPaise, check.afterOrderPaise, snap.limitPaise) : null;
 
         const { lastInsertRowid } = insOrder.run(
           retailerId, source, status,

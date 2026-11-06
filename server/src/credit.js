@@ -56,3 +56,9 @@ export function creditPreview(snapshot, orderTotalPaise) {
     overByPaise: check.overByPaise,
   };
 }
+
+const rupees = (paise) => `${Math.floor(paise / 100)}.${String(paise % 100).padStart(2, '0')}`;
+
+export function holdReasonText(totalPaise, afterOrderPaise, limitPaise) {
+  return `Order total Rs ${rupees(totalPaise)} would take exposure to Rs ${rupees(afterOrderPaise)}, above credit limit Rs ${rupees(limitPaise)}`;
+}
