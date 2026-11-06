@@ -3,6 +3,7 @@ import { errorHandler, HttpError } from './errors.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createCatalogueRouter } from './routes/catalogue.js';
 import { createCartRouter } from './routes/cart.js';
+import { createOrdersRouter } from './routes/orders.js';
 
 /** Builds the Express app. Takes db + config as arguments (no globals) so tests can inject an in-memory DB. */
 export function createApp({ db, config }) {
@@ -20,6 +21,7 @@ export function createApp({ db, config }) {
   app.use('/api', createAuthRouter({ db, config }));
   app.use('/api', createCatalogueRouter({ db, config }));
   app.use('/api', createCartRouter({ db, config }));
+  app.use('/api', createOrdersRouter({ db, config }));
 
   app.use('/api', () => { throw new HttpError(404, 'not_found', 'No such endpoint'); });
   app.use(errorHandler);
