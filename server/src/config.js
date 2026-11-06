@@ -25,5 +25,7 @@ export function loadConfig(env = process.env) {
     dbFile: env.DB_FILE || 'kirana.db',
     sessionSecret,
     tokenTtlSeconds: Math.round(ttlHours * 3600),
+    anthropicApiKey: env.ANTHROPIC_API_KEY || null, // optional: without it, capture uses the local parser
+    llmModel: env.LLM_MODEL || 'claude-haiku-5-5',
   };
 }

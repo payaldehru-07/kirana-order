@@ -4,9 +4,14 @@ import { createAuthRouter } from './routes/auth.js';
 import { createCatalogueRouter } from './routes/catalogue.js';
 import { createCartRouter } from './routes/cart.js';
 import { createOrdersRouter } from './routes/orders.js';
+import { createDeskRouter } from './routes/desk.js';
+import { createCaptureRouter } from './routes/capture.js';
 
-/** Builds the Express app. Takes db + config as arguments (no globals) so tests can inject an in-memory DB. */
-export function createApp({ db, config }) {
+/**
+ * Builds the Express app. Takes db + config (+ an optional LLM extractor) as arguments, with no globals,
+ * so tests can inject an in-memory DB and a fake LLM.
+ */
+export function createApp({ db, config, extractor = null }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '100kb' }));
@@ -22,6 +27,8 @@ export function createApp({ db, config }) {
   app.use('/api', createCatalogueRouter({ db, config }));
   app.use('/api', createCartRouter({ db, config }));
   app.use('/api', createOrdersRouter({ db, config }));
+  app.use('/api', createDeskRouter({ db, config }));
+  app.use('/api', createCaptureRouter({ db, config, extractor }));
 
   app.use('/api', () => { throw new HttpError(404, 'not_found', 'No such endpoint'); });
   app.use(errorHandler);
