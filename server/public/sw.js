@@ -1,6 +1,6 @@
 // Service worker: keeps the app shell on the phone so it opens fast and works as an installed app.
 // Rule: /api calls are NEVER cached (prices and credit are private and change). Only the shell files are.
-const CACHE = 'shell-v1'; // change this number whenever a shell file changes
+const CACHE = 'shell-v2'; // change this number whenever a shell file changes
 const SHELL = ['/', '/style.css', '/i18n.js', '/app.js', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', (e) => {

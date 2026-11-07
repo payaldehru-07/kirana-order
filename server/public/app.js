@@ -5,10 +5,16 @@
 // ---------- small helpers ----------
 const ls = {
   get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
-  set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode: ignore */ } },
+  set: (k, v) => { if (v == null || v === 'null' || v === 'undefined') return; try { localStorage.setItem(k, v); } catch { /* private mode: ignore */ } }, // never store a missing value as text
   del: (k) => { try { localStorage.removeItem(k); } catch { /* ignore */ } },
 };
-const S = { token: ls.get('kt'), user: JSON.parse(ls.get('ku') || 'null'), lang: ls.get('kl') === 'hi' ? 'hi' : 'en', cat: null, me: null, flash: null };
+// A saved session is trusted only if it is real. "null", "undefined", broken JSON or a half session are thrown away.
+const saved = (k) => { const v = ls.get(k); return v && v !== 'null' && v !== 'undefined' ? v : null; };
+function savedUser() {
+  try { const u = JSON.parse(saved('ku')); return u && Number.isInteger(u.id) && (u.role === 'retailer' || u.role === 'desk') ? u : null; } catch { return null; }
+}
+const S = { token: saved('kt'), user: savedUser(), lang: ls.get('kl') === 'hi' ? 'hi' : 'en', cat: null, me: null, flash: null };
+if (!S.token || !S.user) { S.token = null; S.user = null; ls.del('kt'); ls.del('ku'); }
 const t = (k, v) => {
   let s = I18N[S.lang][k] ?? I18N.en[k] ?? k;
   if (v) for (const x in v) s = s.split('{' + x + '}').join(v[x]);
@@ -154,11 +160,13 @@ function drawShell() {
   const hdr = $('hdr');
   document.documentElement.lang = S.lang;
   document.title = t('app');
-  hdr.replaceChildren(
+  // Element.replaceChildren() turns a null into the TEXT "null" (unlike h(), which skips it), so only real nodes go in.
+  hdr.replaceChildren(...[
     h('strong', null, S.user?.role === 'desk' ? t('desk.title') : t('app')),
     h('span', { class: 'grow' }),
     h('button', { class: 'ghost', 'aria-label': 'Language', onclick: () => { S.lang = S.lang === 'en' ? 'hi' : 'en'; ls.set('kl', S.lang); route(); } }, S.lang === 'en' ? 'हिं' : 'EN'),
-    S.token && h('button', { class: 'ghost', onclick: () => logout(false) }, t('logout')));
+    S.token ? h('button', { class: 'ghost', onclick: () => logout(false) }, t('logout')) : null,
+  ].filter(Boolean));
   drawNav();
 }
 function drawNav() {
@@ -193,6 +201,8 @@ function route() {
 }
 
 // ---------- 1. login ----------
+// The seeded demo accounts (invented, see assumption A5). Tapping one only fills the phone box; the server still checks the OTP.
+const DEMO = [['9000000001', 'Sharma', null], ['9000000002', 'Gupta', 'demo.gupta'], ['9000000003', 'Jain', 'demo.jain'], ['9000000004', 'New Bharat', null], ['9000000099', 'Desk', 'demo.desk']];
 function viewLogin() {
   let phone = '';
   const draw = (step, err) => {
@@ -215,6 +225,11 @@ function viewLogin() {
     err && h('p', { class: 'warn', role: 'alert' }, err),
     btn,
     step === 'otp' && h('button', { type: 'button', class: 'ghost', onclick: () => draw('phone') }, t('login.change')),
+    step === 'phone' && h('div', { class: 'demo' },
+      h('p', { class: 'muted small' }, t('login.demoTitle')),
+      h('div', { class: 'demo-grid' }, ...DEMO.map(([num, name, note]) =>
+        h('button', { type: 'button', class: 'demo-btn', onclick: () => { ph.value = num; ph.focus(); } },
+          h('strong', null, name), h('span', null, note ? num + ' · ' + t(note) : num))))),
     h('p', { class: 'muted small' }, t('login.demo')));
     show(form);
     (step === 'phone' ? ph : otp).focus();
@@ -491,6 +506,8 @@ async function viewDesk(live) {
   show(h('h1', null, t('desk.title')),
     h('div', { class: 'tabs', role: 'tablist' }, ...DESK_TABS.map(([k, label]) =>
       h('button', { class: k === deskTab ? 'on' : '', role: 'tab', 'aria-selected': String(k === deskTab), onclick: () => { deskTab = k; route(); } }, t(label)))),
+    h('p', { class: 'hint' }, t('desk.hint.' + (deskTab || 'all'))),
+    deskTab === 'approved' && r.orders.length > 0 && link(t('desk.toTally'), '#/tally', 'btn primary'),
     !r.orders.length && emptyBox(t('desk.none')),
     ...r.orders.map((o) => h('a', { class: 'order block', href: '#/desk/order/' + o.id },
       h('div', { class: 'lhead' }, h('strong', null, o.shopName), h('strong', null, rs(o.totalPaise))),
@@ -505,7 +522,8 @@ async function viewDeskOrder(live, id, notice) {
   let mode = 'view'; // 'view' | 'edit' | 'reject'
   let rows = [];
   let catalogue = null;
-  const reload = (msg) => viewDeskOrder(live, id, msg);
+  // After a desk action: show a success message (toast, so it is seen even when the page is scrolled, and a banner at the top).
+  const reload = (msg) => { if (msg) toast(msg); window.scrollTo(0, 0); viewDeskOrder(live, id, msg); };
   const act = async (fn, msg) => { try { await fn(); reload(msg); } catch (e) { toast(e.message); } };
   const open = o.status === 'placed' || o.status === 'credit_hold';
 
@@ -524,12 +542,13 @@ async function viewDeskOrder(live, id, notice) {
       mode === 'edit' ? editBox() : linesBox(),
       mode === 'reject' && h('div', { class: 'ask' }, h('label', { htmlFor: 'why' }, t('desk.reason')), h('input', { id: 'why', maxlength: 200 }),
         h('div', { class: 'actions' },
-          h('button', { class: 'btn danger', onclick: () => act(() => api(`/desk/orders/${id}/reject`, { method: 'POST', body: { reason: $('why').value.trim() || null } })) }, t('desk.confirmReject')),
+          h('button', { class: 'btn danger', onclick: () => act(() => api(`/desk/orders/${id}/reject`, { method: 'POST', body: { reason: $('why').value.trim() || null } }), t('desk.msg.rejected', { id })) }, t('desk.confirmReject')),
           h('button', { class: 'ghost', onclick: () => { mode = 'view'; paint(); } }, t('cancel')))),
       mode === 'view' && (open || o.status === 'approved') && h('div', { class: 'actions' },
-        open && h('button', { class: 'btn primary', onclick: () => { if (cc.exceedsLimit && !confirm(t('desk.approveAnyway'))) return; act(() => api(`/desk/orders/${id}/approve`, { method: 'POST' })); } }, t('desk.approve')),
+        open && h('button', { class: 'btn primary', onclick: () => { if (cc.exceedsLimit && !confirm(t('desk.approveAnyway'))) return; act(() => api(`/desk/orders/${id}/approve`, { method: 'POST' }), t(o.status === 'credit_hold' ? 'desk.msg.approvedHold' : 'desk.msg.approved', { id })); } }, t('desk.approve')),
         open && h('button', { class: 'btn', onclick: startEdit }, t('desk.edit')),
         h('button', { class: 'btn danger', onclick: () => { mode = 'reject'; paint(); } }, t('desk.reject'))),
+      mode === 'view' && o.status === 'approved' && link(t('desk.toTally'), '#/tally', 'btn'),
     ];
     show(...parts);
   };
@@ -572,28 +591,49 @@ async function viewDeskOrder(live, id, notice) {
 const skuInfoName = (cat, code) => { const s = cat.find((x) => x.code === code); return s ? nm(s) : code; };
 
 // ---------- 7. Tally export ----------
-async function viewTally(live) {
+const plural = (n, one, many, v) => t(n === 1 ? one : many, { n, ...v });
+async function viewTally(live, created) { // `created` = { export, orders } right after the desk pressed "Create export"
   show(loadingBox());
-  const r = await load(live, () => api('/desk/exports'));
-  if (!r || !live()) return;
+  const res = await load(live, () => Promise.all([api('/desk/exports'), api('/desk/exports/waiting')]));
+  if (!res || !live()) return;
+  const [{ exports: past }, wait] = res;
   const dl = async (id, fmt) => { // a plain link cannot send the login token, so fetch the file and save it
     try {
-      const res = await fetch(`/api/desk/exports/${id}/file?format=${fmt}`, { headers: { Authorization: 'Bearer ' + S.token } });
-      if (!res.ok) throw new ApiError(res.status, 'error', t('err.generic'));
-      const url = URL.createObjectURL(await res.blob());
+      const r = await fetch(`/api/desk/exports/${id}/file?format=${fmt}`, { headers: { Authorization: 'Bearer ' + S.token } });
+      if (!r.ok) throw new ApiError(r.status, 'error', t('err.generic'));
+      const url = URL.createObjectURL(await r.blob());
       const a = h('a', { href: url, download: `tally-export-${id}.${fmt}` });
       document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
     } catch (e) { toast(e.message || t('err.network')); }
   };
-  const btn = h('button', { class: 'btn primary wide' }, t('tally.create'));
+  const orderRows = (orders) => orders.map((o) => row('#' + o.id + ' · ' + o.shopName, rs(o.totalPaise)));
+  const files = (id) => h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => dl(id, 'xml') }, 'XML'), h('button', { class: 'btn', onclick: () => dl(id, 'csv') }, 'CSV'));
+  const btn = h('button', { class: 'btn primary wide', disabled: wait.orderCount === 0 }, t('tally.create'));
   btn.addEventListener('click', async () => {
     btn.disabled = true;
-    try { const x = await api('/desk/exports', { method: 'POST' }); toast(t('tally.created', { id: x.export.id })); route(); } catch (e) { toast(e.message); btn.disabled = false; }
+    try {
+      const x = await api('/desk/exports', { method: 'POST' });
+      toast(t('tally.created', { id: x.export.id }));
+      viewTally(live, x);
+    } catch (e) { toast(e.message); route(); } // e.g. someone else just exported: reload the real waiting count
   });
-  show(h('h1', null, t('tally.title')), btn, !r.exports.length && emptyBox(t('tally.none')),
-    ...r.exports.map((x) => h('article', { class: 'order' },
-      h('div', null, h('strong', null, '#' + x.id), ' ', h('span', { class: 'muted' }, when(x.createdAt) + ' · ' + t('tally.orders', { n: x.orderCount }) + ' · ' + rs(x.totalPaise))),
-      h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => dl(x.id, 'xml') }, 'XML'), h('button', { class: 'btn', onclick: () => dl(x.id, 'csv') }, 'CSV')))));
+  const done = created && h('section', { class: 'done' },
+    h('h2', null, t('tally.createdTitle', { id: created.export.id })),
+    h('p', { class: 'muted' }, plural(created.export.orderCount, 'tally.orders1', 'tally.orders') + ' · ' + rs(created.export.totalPaise)),
+    h('div', { class: 'totals' }, ...orderRows(created.orders)),
+    files(created.export.id));
+  const earlier = past.filter((x) => !created || x.id !== created.export.id);
+  show(h('h1', null, t('tally.title')), h('p', { class: 'hint' }, t('tally.hint')),
+    h('div', { class: 'waiting' + (wait.orderCount ? '' : ' none') }, h('strong', null, plural(wait.orderCount, 'tally.waiting1', 'tally.waiting', { a: rs(wait.totalPaise) }))),
+    wait.orderCount > 0 && h('div', { class: 'totals' }, ...orderRows(wait.orders)),
+    btn,
+    wait.orderCount === 0 && h('p', { class: 'muted' }, t('tally.approveFirst'), ' ', link(t('desk.title'), '#/desk', 'btn')),
+    done,
+    !past.length && !created && emptyBox(t('tally.none')),
+    earlier.length > 0 && h('h2', null, t('tally.earlier')),
+    ...earlier.map((x) => h('article', { class: 'order' },
+      h('div', null, h('strong', null, '#' + x.id), ' ', h('span', { class: 'muted' }, when(x.createdAt) + ' · ' + plural(x.orderCount, 'tally.orders1', 'tally.orders') + ' · ' + rs(x.totalPaise))),
+      files(x.id))));
 }
 
 // ---------- start ----------
