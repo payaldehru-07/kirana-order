@@ -147,3 +147,21 @@ test('CSV neutralises spreadsheet formulas and quotes commas', () => {
   assert.ok(csv.includes(`"'=HYPERLINK(""http://evil"")"`));
   assert.ok(tallyCsv(sample('Gupta, Sons')).includes('"Gupta, Sons"'));
 });
+
+test('waiting endpoint: counts only approved orders, and POST export returns the orders it took', async () => {
+  const waitingNow = async () => (await s.call('GET', '/api/desk/exports/waiting', { token: desk })).body;
+  assert.deepEqual(await waitingNow(), { orderCount: 0, totalPaise: 0, orders: [] });
+
+  const { a, b } = await twoApprovedOneWaiting(); // third order stays 'placed' and must not be counted
+  const w = await waitingNow();
+  assert.equal(w.orderCount, 2);
+  assert.equal(w.totalPaise, 937864 + 90058);
+  assert.deepEqual(w.orders.map((o) => [o.id, o.shopName, o.totalPaise]), [
+    [a.id, 'Sharma Kirana Store', 937864], [b.id, 'Jain Provision', 90058],
+  ]);
+
+  const r = await exportAll();
+  assert.equal(r.status, 201);
+  assert.deepEqual(r.body.orders.map((o) => o.id), [a.id, b.id]);
+  assert.deepEqual(await waitingNow(), { orderCount: 0, totalPaise: 0, orders: [] }); // nothing waiting after export
+});

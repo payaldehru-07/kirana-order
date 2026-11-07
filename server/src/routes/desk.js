@@ -41,7 +41,13 @@ export function createDeskRouter({ db, config }) {
 
   // ---- Tally ----
   router.post('/desk/exports', ...guard, (req, res) => {
-    res.status(201).json({ export: desk.createExport() });
+    const created = desk.createExport();
+    res.status(201).json({ export: created, orders: desk.exportBrief(created.id).orders });
+  });
+
+  // GET /api/desk/exports/waiting -> { orderCount, totalPaise, orders: [{ id, shopName, totalPaise }] } (approved, not yet exported)
+  router.get('/desk/exports/waiting', ...guard, (req, res) => {
+    res.json(desk.waitingExport());
   });
 
   router.get('/desk/exports', ...guard, (req, res) => {

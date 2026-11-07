@@ -14,6 +14,13 @@ export const STATUSES = ['placed', 'credit_hold', 'approved', 'rejected', 'expor
  *   placed / credit_hold  --edit lines-->  same status (a placed order that now breaks the limit becomes credit_hold)
  * Every change runs in one transaction and checks the current status INSIDE it.
  */
+/** Short summary of a set of orders for the Tally screen: count, total, and one small row per order. */
+const brief = (rows) => ({
+  orderCount: rows.length,
+  totalPaise: rows.reduce((a, r) => a + r.total_paise, 0),
+  orders: rows.map((r) => ({ id: r.id, shopName: r.shop_name, totalPaise: r.total_paise })),
+});
+
 export function createDeskService(db, orders) {
   const skuRepo = createSkuRepo(db);
   const credit = createCreditRepo(db);
@@ -180,6 +187,16 @@ export function createDeskService(db, orders) {
         }
         return this.getExport(exportId);
       });
+    },
+
+    /** Approved orders waiting for the next export. Read-only; the Tally screen shows this before the desk presses Export. */
+    waitingExport() {
+      return brief(db.prepare("SELECT o.id, r.shop_name, o.total_paise FROM orders o JOIN retailers r ON r.id = o.retailer_id WHERE o.status = 'approved' ORDER BY o.id").all());
+    },
+
+    /** The orders inside one export batch (short form), so the screen can show what was just exported. */
+    exportBrief(exportId) {
+      return brief(db.prepare('SELECT o.id, r.shop_name, o.total_paise FROM orders o JOIN retailers r ON r.id = o.retailer_id WHERE o.export_id = ? ORDER BY o.id').all(exportId));
     },
 
     getExport(exportId) {

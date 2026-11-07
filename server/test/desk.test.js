@@ -30,7 +30,7 @@ test('every desk route is desk-only: retailers get 403, anonymous gets 401', asy
   const routes = [
     ['GET', '/api/desk/orders'], ['GET', '/api/desk/orders/1'], ['POST', '/api/desk/orders/1/approve'],
     ['POST', '/api/desk/orders/1/reject', {}], ['PUT', '/api/desk/orders/1/lines', { items: [BS(1)] }],
-    ['POST', '/api/desk/exports', {}], ['GET', '/api/desk/exports'], ['GET', '/api/desk/exports/1/file'],
+    ['POST', '/api/desk/exports', {}], ['GET', '/api/desk/exports'], ['GET', '/api/desk/exports/waiting'], ['GET', '/api/desk/exports/1/file'],
   ];
   for (const [method, path, body] of routes) {
     assert.equal((await s.call(method, path, { token: sharma, body })).status, 403, `${method} ${path} as retailer`);
